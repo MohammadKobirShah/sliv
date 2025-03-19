@@ -1,0 +1,57 @@
+name: M3U Processing & Restreaming
+
+on:
+  workflow_dispatch:  # Manual trigger
+  schedule:
+    - cron: "0 */4 * * *"  # Runs every 4 hours
+
+jobs:
+  process_m3u:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240  # Ensures it stops after 4 hours
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Install Dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y curl jq pptp-linux ppp
+
+      - name: (Optional) Connect to PPTP VPN
+        if: env.PPTP_SERVER != ''
+        run: |
+          echo "pty 'pptp ${{ secrets.PPTP_SERVER }} --nolaunchpppd'" > pptp.conf
+          echo "name ${{ secrets.PPTP_USERNAME }}" >> pptp.conf
+          echo "password ${{ secrets.PPTP_PASSWORD }}" >> pptp.conf
+          echo "remotename PPTP" >> pptp.conf
+          echo "require-mppe-128" >> pptp.conf
+          echo "persist" >> pptp.conf
+          echo "maxfail 0" >> pptp.conf
+
+          sudo pppd call pptp.conf updetach noauth debug persist defaultroute replacedefaultroute usepeerdns
+
+      - name: Download M3U Playlist
+        run: |
+          curl -o sliv.m3u https://kailivetv.vercel.app/sliv.m3u
+          cat sliv.m3u
+
+      - name: Extract & Separate Channels
+        run: |
+          mkdir -p channels
+          awk -F "," '/#EXTINF/ {gsub(/ /,"_",$2); fname="channels/"$2".m3u"} fname {print > fname}' sliv.m3u
+          ls -lah channels/
+
+      - name: Commit and Push Updates
+        run: |
+          git config --global user.name "github-actions"
+          git config --global user.email "actions@github.com"
+          git add channels/
+          git commit -m "Updated M3U channels at $(date)" || echo "No changes to commit"
+          git push || echo "No changes to push"
+
+      - name: Auto-Restart Workflow
+        if: always()
+        run: |
+          echo "Workflow completed. Next run in 4 hours..."
